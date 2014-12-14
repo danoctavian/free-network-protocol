@@ -10,26 +10,26 @@ import Control.Applicative
 
 type ExceptionValue = String
 
-data Protocol result = Send ByteString (Protocol result)
-                     | Recv Int (ByteString -> Protocol result)
-                     | forall a . (Serialize a) => RecvMsg  (a -> Protocol result)
-                     | forall a . (Serialize a) => SendMsg a (Protocol result)
+data Protocol e result = Send ByteString (Protocol e result)
+                     | Recv Int (ByteString -> Protocol e result)
+                     | forall a . (Serialize a) => RecvMsg  (a -> Protocol e result)
+                     | forall a . (Serialize a) => SendMsg a (Protocol e result)
                      | Finalize result
-                     | Exception ExceptionValue
+                     | Exception e 
 
 -- operations
 send bs = Send bs $ return ()
 recv sz = Recv sz return
 finalize = Finalize 
-recvMsg :: forall a . (Serialize a) => Protocol a
+recvMsg :: forall e a . (Serialize a) => Protocol e a
 recvMsg = RecvMsg return
-sendMsg :: forall a . (Serialize a) => a -> Protocol ()
+sendMsg :: forall e a . (Serialize a) => a -> Protocol e ()
 sendMsg m = SendMsg m $ return ()
 throwException = Exception
 
 -- making it a free monad.
 -- cannot use the 'free' package because of the existential types in Protocol
-instance Functor Protocol where
+instance Functor (Protocol e) where
   fmap f (Finalize r) = Finalize  $ f r
   fmap f (Exception err) = Exception err
   fmap f (Send bs g) = Send bs (fmap f $ g)
@@ -37,11 +37,11 @@ instance Functor Protocol where
   fmap f (SendMsg m g) = SendMsg m (fmap f $ g)
   fmap f (RecvMsg g) = RecvMsg (fmap f . g)
 
-instance Applicative Protocol where
+instance Applicative (Protocol e) where
   pure = return
   (<*>) = undefined
 
-instance Monad Protocol where
+instance Monad (Protocol e) where
   return = Finalize
   Finalize r >>= m = m r
   Exception e >>= m = Exception e
@@ -50,12 +50,3 @@ instance Monad Protocol where
   SendMsg msg p >>= m = SendMsg msg (p >>= m)
   RecvMsg p >>= m = RecvMsg (\bs -> p bs >>= m)
 
-runProtocol sendOp recvOp = run where
-  run (Recv x f) = recvOp >>= run . f
-  run (Send bs f) = sendOp bs >> run f
-  run (SendMsg msg f) = (sendOp (encode msg)) >> run f
-  run (Finalize r) = sendOp "we're done" >> (return $ Right r)
-  run (Exception e) = sendOp " EXCEPTION" >> (return $ Left e)
-
-
-test = runProtocol BS.putStrLn BS.getLine (send "write bitch" >> recv 1 >>= send >> send "closing up now" >> finalize 25)
